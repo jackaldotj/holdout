@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, user-scalable=no">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Holdout">
+<meta name="theme-color" content="#16180f">
+<title>Holdout</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="icon-180.png">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div id="app">
+  <header id="topbar">
+    <div id="res"></div>
+    <div id="moraleWrap"><span>Morale</span><div id="moraleBar"><div id="moraleFill"></div></div><span id="moraleVal"></span></div>
+  </header>
+
+  <main id="screens">
+    <section id="tab-camp" class="screen active"></section>
+    <section id="tab-people" class="screen"></section>
+    <section id="tab-map" class="screen"></section>
+  </main>
+
+  <nav id="tabs">
+    <button data-tab="camp" class="active">Camp</button>
+    <button data-tab="people">People</button>
+    <button data-tab="map">Map</button>
+  </nav>
+</div>
+
+<div id="battle" hidden>
+  <div id="bf">
+    <canvas id="bcanvas"></canvas>
+    <div class="hud hud-left">
+      <div class="lcd-pair">
+        <div class="lcd" id="hAlive" title="Soldiers alive">00</div>
+        <div class="lcd cyan" id="hAmmo" title="Ammo">00</div>
+      </div>
+      <div class="portrait you"><div class="pbar"><div id="hYouHp"></div></div></div>
+    </div>
+    <div class="hud hud-mid">
+      <div class="obj-top"><span id="hObjName">CLEAR</span></div>
+      <div id="hObjText">clear the sector</div>
+      <div class="objbar"><div id="hObjFill"></div></div>
+    </div>
+    <div class="hud hud-right">
+      <div class="portrait zed"><div class="pbar"><div id="hZedHp"></div></div></div>
+      <div class="lcd-pair">
+        <div class="lcd" id="hZeds" title="Zombies left">00</div>
+        <div class="lcd orange" id="hSurge" title="Next surge">00</div>
+      </div>
+    </div>
+  </div>
+  <div id="panel">
+    <div id="stanceText" class="lcd-wide">HOLDING GROUND</div>
+    <div id="orders">
+      <button data-stance="retreat">RETREAT</button>
+      <button data-stance="back">BACK</button>
+      <button data-stance="hold">HOLD</button>
+      <button data-stance="advance">ADVANCE</button>
+      <button data-stance="charge">CHARGE</button>
+    </div>
+  </div>
+  <div id="rotate">
+    <div class="phone"></div>
+    <p>Turn your phone sideways to fight</p>
+  </div>
+</div>
+
+<div id="modal" hidden><div id="modalBox"></div></div>
+<div id="toast"></div>
+
+<script src="game.js"></script>
+</body>
+</html>
