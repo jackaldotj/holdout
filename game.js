@@ -488,7 +488,7 @@ function startBattle() {
   for (const type of order) for (let i = 0; i < loadout[type]; i++) {
     const p = free[fi++];
     const armored = armorLeft > 0; if (armored) armorLeft--;
-    squad.push({ p, type, x: 0, hp: 100, armor: armored, cd: rand(0, 1), flash: 0, dead: false, bob: rand(0, 6), lane: rand(-1, 1), scale: rand(0.92, 1.05) });
+    squad.push({ p, type, x: 0, hp: 100, armor: armored, cd: rand(0, 1), flash: 0, swing: 0, dead: false, bob: rand(0, 6), lane: rand(-1, 1), scale: rand(0.92, 1.05) });
   }
   const gunners = loadout.rifleman + loadout.sniper;
   const ammo = Math.min(S.res.ammo, gunners * 40);
@@ -502,7 +502,7 @@ function startBattle() {
   const total = sectorHorde(r, c);
   B = {
     r, c, squad, total, killed: 0, zeds: [], pool: total, ammo, ammoStart: ammo, usedArmor,
-    stance: 'hold', squadX: 120, surge: 22, noise: 0, time: 0, over: false, fx: [], tracers: [],
+    stance: 'hold', squadX: 120, surge: 22, noise: 0, time: 0, over: false, fx: [], tracers: [], splats: [],
     type: sectorType(r, c), seed: Math.random() * 1000,
   };
   // Initial zombies scattered ahead.
@@ -517,7 +517,9 @@ function startBattle() {
 }
 function spawnZed(x) {
   const fresh = Math.random() < 0.25 + Math.min(0.3, (B.r + B.c) * 0.02);
-  B.zeds.push({ x, hp: fresh ? 45 : 70, max: fresh ? 45 : 70, speed: fresh ? rand(40, 55) : rand(14, 22), dmg: fresh ? 13 : 9, fresh, dead: false, bob: rand(0, 6), lane: rand(-1, 1), scale: rand(0.9, 1.1), hit: 0, crawl: !fresh && Math.random() < 0.12 });
+  const crawl = !fresh && Math.random() < 0.12;
+  B.zeds.push({ x, hp: fresh ? 45 : 70, max: fresh ? 45 : 70, speed: fresh ? rand(40, 55) : rand(14, 22), dmg: fresh ? 13 : 9, fresh, dead: false, bob: rand(0, 6), lane: rand(-1, 1), scale: rand(0.9, 1.1), hit: 0, crawl,
+    row: crawl ? ZROW_CRAWL : fresh ? pick(ZROW_RUN) : pick(ZROW_WALK) });
 }
 function setStance(s) {
   if (!B) return;
@@ -547,32 +549,39 @@ function battleStep(dt) {
     let dx = target - s.x;
     if (dx > 0 && contact) dx = 0;
     const max = Math.abs(SPEED[B.stance] || 40) * 1.3 + 20;
-    s.x += Math.sign(dx) * Math.min(Math.abs(dx), max * dt);
+    const step = Math.sign(dx) * Math.min(Math.abs(dx), max * dt);
+    s.x += step; s.spd = Math.abs(step) / dt;
     s.moving = Math.abs(dx) > 1;
-    s.cd -= dt; s.flash -= dt;
+    s.cd -= dt; s.flash -= dt; s.swing -= dt;
     // Combat
     if (s.type === 'medic') {
       const hurt = a.filter(o => o !== s && o.hp < 100 && Math.abs(o.x - s.x) < 90).sort((p, q) => p.hp - q.hp)[0];
       if (hurt) hurt.hp = Math.min(100, hurt.hp + 9 * dt);
+      s.heal = !!hurt && !s.moving;
       continue;
     }
     const gun = (s.type === 'rifleman' || s.type === 'sniper') && B.ammo > 0;
     const range = gun ? (s.type === 'sniper' ? 520 : 280) : 22;
     const tgt = nearestZed(s.x, range);
+    s.aim = !!tgt; s.gun = gun;
     if (tgt && s.cd <= 0) {
       if (gun) {
         B.ammo--;
         const sniper = s.type === 'sniper';
         const acc = (sniper ? 0.9 : 0.72) * (B.stance === 'charge' ? 0.6 : B.stance === 'hold' ? 1.1 : 1);
         s.cd = sniper ? 2.4 : (B.stance === 'charge' ? 1.6 : 0.85) * rand(0.85, 1.15);
-        s.flash = 0.07;
-        B.tracers.push({ x1: s.x + 22, y1: s.lane, x2: tgt.x, life: 0.06 });
+        s.flash = 0.07; s.fv = Math.floor(rand(0, 3));
+        const m = MUZZLE[s.type], sc = s.scale * 0.95, gy = viewH * GROUND;
+        const mx = s.x + m.x * sc, my = gy + s.lane * 6 + m.y * sc;
+        B.tracers.push({ x1: mx, y1: my, x2: tgt.x, y2: zedChestY(tgt, gy), life: 0.07 });
+        B.fx.push({ k: 'smoke', x: mx + 4, y: my, vx: rand(4, 12), vy: rand(-10, -4), life: 0, max: rand(0.9, 1.4) });
+        B.fx.push({ k: 'brass', x: s.x + 6 * sc, y: my + 4, vx: rand(-30, -10), vy: rand(-55, -35), life: 0, max: 0.6, gy: gy + s.lane * 6 });
         B.noise += sniper ? 1.2 : 1;
         B.surge -= sniper ? 0.18 : 0.12;
         shot(sniper);
         if (Math.random() < acc) hurtZed(tgt, sniper ? 110 : rand(28, 40));
       } else {
-        s.cd = 0.8;
+        s.cd = 0.8; s.swing = 0.3;
         hurtZed(tgt, (s.type === 'brawler' ? 24 : 12) * (B.stance === 'charge' ? 1.5 : 1));
         tone(140, 0.05, 'sawtooth', 0.03);
       }
@@ -583,14 +592,16 @@ function battleStep(dt) {
     if (z.dead) { z.fade = (z.fade || 0) + dt; continue; }
     z.hit -= dt;
     const tgt = a.reduce((best, s) => (s.x <= z.x + 10 && (!best || s.x > best.x)) ? s : best, null) || a[0];
-    if (z.x - tgt.x > 14) z.x -= z.speed * (z.crawl ? 0.6 : 1) * dt;
+    z.bite = z.x - tgt.x <= 14;
+    if (!z.bite) z.x -= z.speed * (z.crawl ? 0.6 : 1) * dt;
     else {
       const dmg = z.dmg * dt * (tgt.armor ? 0.55 : 1);
       tgt.hp -= dmg;
+      if (Math.random() < dt * 1.5) { const gy = viewH * GROUND + tgt.lane * 6; bleed(tgt.x + 4, gy - 48 * tgt.scale, gy, -1, 4); }
       if (tgt.hp <= 0 && !tgt.dead) { tgt.dead = true; tone(90, 0.3, 'sine', 0.08); }
     }
   }
-  B.zeds = B.zeds.filter(z => !z.dead || z.fade < 3);
+  B.zeds = B.zeds.filter(z => !z.dead || z.fade < 8);
   // Surges: noise brings waves sooner.
   B.surge -= dt;
   if (B.surge <= 0 && B.pool > 0) {
@@ -601,6 +612,13 @@ function battleStep(dt) {
     B.surge = 24;
     toast('Surge incoming!');
   }
+  for (const f of B.fx) {
+    f.life += dt; f.x += f.vx * dt; f.y += f.vy * dt;
+    if (f.k === 'drop' || f.k === 'brass') f.vy += 260 * dt;
+    if (f.k === 'drop' && f.y >= f.gy) { f.life = f.max; if (Math.random() < 0.35) splat(f.x, f.gy, rand(0.25, 0.5)); }
+    if (f.k === 'brass' && f.y >= f.gy) { f.y = f.gy; f.vy *= -0.35; f.vx *= 0.5; }
+  }
+  B.fx = B.fx.filter(f => f.life < f.max);
   for (const t of B.tracers) t.life -= dt;
   B.tracers = B.tracers.filter(t => t.life > 0);
   const left = B.total - B.killed;
@@ -616,9 +634,18 @@ function nearestZed(x, range) {
   return best;
 }
 function hurtZed(z, dmg) {
-  z.hp -= dmg; z.hit = 0.1;
-  if (z.hp <= 0 && !z.dead) { z.dead = true; B.killed++; }
+  z.hp -= dmg; z.hit = 0.12;
+  const gy = viewH * GROUND + z.lane * 6;
+  bleed(z.x, zedChestY(z, viewH * GROUND), gy, 1, dmg > 60 ? 9 : 5);
+  if (z.hp <= 0 && !z.dead) { z.dead = true; B.killed++; splat(z.x + (z.crawl ? -4 : 22) * z.scale, gy, rand(0.7, 1.1)); }
 }
+// Blood: a spray sprite plus a few droplets that leave stains where they land.
+function zedChestY(z, g) { return g + z.lane * 6 - (z.crawl ? 10 : 46) * z.scale; }
+function bleed(x, y, gy, dirn, n) {
+  B.fx.push({ k: 'spray', x, y, dirn, v: Math.floor(rand(0, 3)), vx: 0, vy: 0, life: 0, max: 0.16 });
+  for (let i = 0; i < n; i++) B.fx.push({ k: 'drop', x, y, vx: dirn * rand(15, 70), vy: rand(-60, -10), life: 0, max: 2, gy: gy + rand(-2, 3), r: rand(0.6, 1.4) });
+}
+function splat(x, y, s) { B.splats.push({ x, y, s }); if (B.splats.length > 80) B.splats.shift(); }
 
 function endBattle(result) {
   if (B.over) return;
@@ -667,7 +694,26 @@ function endBattle(result) {
 }
 function stopBattleView() { $('#battle').hidden = true; $('#battle').classList.remove('active'); }
 
-// ---------- Battle drawing (original placeholder art: dark side-on silhouettes) ----------
+// ---------- Battle drawing ----------
+// Characters and effects come from sprites.png, an atlas of original painted sprites built by
+// tools/sprites/build.cjs. Each cell is 88 x 96 units (stored at 2x), feet anchored at (36, 90).
+const SPR = { img: new Image(), cw: 88, ch: 96, ax: 36, ay: 90, k: 2, ready: false };
+SPR.img.onload = () => { SPR.ready = true; };
+SPR.img.src = 'sprites.png';
+// Rows: rifleman, sniper, brawler, medic (plain, then armored), five zombies, a crawler, effects.
+const SOLDIER_ROW = { rifleman: 0, sniper: 2, brawler: 4, medic: 6 };
+const ZROW_WALK = [8, 9, 10], ZROW_RUN = [11, 12], ZROW_CRAWL = 13, FX_ROW = 14;
+// Muzzle tip in the firing frame, relative to the feet.
+const MUZZLE = { rifleman: { x: 38, y: -61.9 }, sniper: { x: 47.5, y: -62.6 } };
+function spr(row, col, x, y, sc) {
+  const { cw, ch, k } = SPR;
+  cx.drawImage(SPR.img, col * cw * k, row * ch * k, cw * k, ch * k, x - SPR.ax * sc, y - SPR.ay * sc, cw * sc, ch * sc);
+}
+function fxSpr(col, x, y, sc) { // effect cells are centred
+  const { cw, ch, k } = SPR;
+  cx.drawImage(SPR.img, col * cw * k, FX_ROW * ch * k, cw * k, ch * k, x - cw / 2 * sc, y - ch / 2 * sc, cw * sc, ch * sc);
+}
+
 const cv = $('#bcanvas'), cx = cv.getContext('2d');
 let viewW = 800, viewH = 300, camX = 0, dpr = 1;
 function resizeCanvas() {
@@ -702,15 +748,26 @@ function drawBattle() {
   // Finish line
   const fxp = W_END - camX;
   if (fxp < viewW + 20) { cx.fillStyle = 'rgba(255,255,255,.5)'; cx.fillRect(fxp, g - 140, 2, 160); }
-  // Entities sorted by lane (depth)
-  const ents = [];
-  for (const z of B.zeds) ents.push({ e: z, z: true });
-  for (const s of B.squad) if (!s.dead) ents.push({ e: s, z: false });
-  ents.sort((p, q) => p.e.lane - q.e.lane);
-  for (const it of ents) it.z ? drawZed(it.e, g) : drawSoldier(it.e, g);
-  // Tracers
-  cx.strokeStyle = 'rgba(255,230,140,.85)'; cx.lineWidth = 1;
-  for (const t of B.tracers) { const y = g + t.y1 * 6 - 46; cx.beginPath(); cx.moveTo(t.x1 - camX, y); cx.lineTo(t.x2 - camX, y + 4); cx.stroke(); }
+  if (SPR.ready) {
+    // Blood on the ground, then contact shadows, then everyone sorted by lane (depth).
+    for (const p of B.splats) { const x = p.x - camX; if (x > -30 && x < viewW + 30) fxSpr(7, x, p.y, p.s); }
+    const ents = [];
+    for (const z of B.zeds) ents.push({ e: z, z: true });
+    for (const s of B.squad) ents.push({ e: s, z: false });
+    ents.sort((p, q) => (q.e.dead - p.e.dead) || p.e.lane - q.e.lane);
+    for (const it of ents) if (!it.e.dead) { const x = it.e.x - camX; if (x > -40 && x < viewW + 40) fxSpr(8, x + 2, g + it.e.lane * 6, it.e.scale * 0.8); }
+    for (const it of ents) it.z ? drawZed(it.e, g) : drawSoldier(it.e, g);
+    drawFx();
+  }
+  // Tracers: a bright head with a fading tail.
+  cx.lineWidth = 1.2;
+  for (const t of B.tracers) {
+    const k = 1 - t.life / 0.07, hx = t.x1 + (t.x2 - t.x1) * Math.min(1, k + 0.45), hy = t.y1 + (t.y2 - t.y1) * Math.min(1, k + 0.45);
+    const tx = t.x1 + (t.x2 - t.x1) * k, ty = t.y1 + (t.y2 - t.y1) * k;
+    const gr = cx.createLinearGradient(tx - camX, ty, hx - camX, hy);
+    gr.addColorStop(0, 'rgba(255,220,140,0)'); gr.addColorStop(1, 'rgba(255,240,190,.95)');
+    cx.strokeStyle = gr; cx.beginPath(); cx.moveTo(tx - camX, ty); cx.lineTo(hx - camX, hy); cx.stroke();
+  }
   // Front grass over feet
   grass(1, g + 14, '#1d2416', 5);
 }
@@ -740,55 +797,55 @@ function grass(par, base, col, step) {
   }
   cx.lineTo(viewW, viewH); cx.closePath(); cx.fill();
 }
+function walkFrame(e, rate) { return Math.floor(B.time * rate + e.bob * 1.3) % 8; }
 function drawSoldier(s, g) {
-  const x = s.x - camX; if (x < -40 || x > viewW + 40) return;
+  const x = s.x - camX; if (x < -50 || x > viewW + 50) return;
   const sc = s.scale * 0.95, y = g + s.lane * 6;
-  const walk = s.moving ? Math.sin(B.time * 9 + s.bob) * 4 : 0;
-  cx.save(); cx.translate(x, y); cx.scale(sc, sc);
-  const body = s.hp < 35 ? '#3a2a24' : '#262a20';
-  cx.fillStyle = body; cx.strokeStyle = body; cx.lineCap = 'round';
-  // legs
-  cx.lineWidth = 6; cx.beginPath(); cx.moveTo(0, -30); cx.lineTo(-4 + walk, 0); cx.moveTo(2, -30); cx.lineTo(6 - walk, 0); cx.stroke();
-  // torso (vest if armored)
-  cx.fillStyle = s.armor ? '#353d2a' : body;
-  cx.fillRect(-7, -58, 15, 30);
-  // head + helmet
-  cx.fillStyle = '#262a20'; cx.beginPath(); cx.arc(1, -64, 6, 0, Math.PI * 2); cx.fill();
-  cx.fillStyle = '#323827'; cx.beginPath(); cx.arc(1, -66, 8, Math.PI, 0); cx.fill();
-  cx.strokeStyle = '#1a1c16'; cx.lineWidth = 3;
-  if (s.type === 'rifleman' || s.type === 'sniper') {
-    const len = s.type === 'sniper' ? 32 : 26;
-    cx.beginPath(); cx.moveTo(-2, -50); cx.lineTo(len, -52); cx.stroke();
-    cx.lineWidth = 4; cx.beginPath(); cx.moveTo(4, -54); cx.lineTo(14, -51); cx.stroke();
-    if (s.flash > 0) { cx.fillStyle = '#ffd56a'; cx.beginPath(); cx.arc(len + 3, -52, 5, 0, Math.PI * 2); cx.fill(); }
-  } else if (s.type === 'brawler') {
-    const sw = s.cd > 0.6 ? -1.2 : 0.4;
-    cx.save(); cx.translate(4, -52); cx.rotate(sw); cx.lineWidth = 3; cx.beginPath(); cx.moveTo(0, 0); cx.lineTo(18, 0); cx.stroke(); cx.restore();
-  } else if (s.type === 'medic') {
-    cx.fillStyle = '#d9d2c0'; cx.fillRect(-6, -52, 8, 8); cx.fillStyle = '#b33'; cx.fillRect(-3.5, -51, 3, 6); cx.fillRect(-5, -49.5, 6, 3);
+  const row = SOLDIER_ROW[s.type] + (s.armor ? 1 : 0);
+  let col;
+  if (s.dead) col = 12;
+  else if (s.type === 'medic') col = s.heal ? (Math.floor(B.time * 1.5 + s.bob) % 2 ? 10 : 11) : s.moving ? walkFrame(s, Math.max(7, s.spd / 5)) : 8;
+  else if (s.swing > 0) col = s.swing > 0.15 ? 11 : s.type === 'brawler' ? 9 : 11;
+  else if (s.aim && !s.gun) col = s.cd < 0.25 ? 10 : 8;
+  else if (s.aim) col = s.flash > 0 ? 9 : 8;
+  else col = s.moving ? walkFrame(s, Math.max(7, s.spd / 5)) : 8;
+  spr(row, col, x, y, sc);
+  if (s.dead) return;
+  if (s.flash > 0 && MUZZLE[s.type]) {
+    const m = MUZZLE[s.type];
+    cx.globalCompositeOperation = 'lighter';
+    fxSpr(s.fv || 0, x + m.x * sc, y + m.y * sc, sc * (s.type === 'sniper' ? 1.15 : 0.9));
+    cx.globalCompositeOperation = 'source-over';
   }
-  cx.restore();
   // health tick
-  if (s.hp < 100) { cx.fillStyle = '#000a'; cx.fillRect(x - 10, y - 82, 20, 3); cx.fillStyle = s.hp > 50 ? '#7fc95a' : '#e0312b'; cx.fillRect(x - 10, y - 82, 20 * s.hp / 100, 3); }
+  if (s.hp < 100) { cx.fillStyle = '#000a'; cx.fillRect(x - 10, y - 84 * sc, 20, 3); cx.fillStyle = s.hp > 50 ? '#7fc95a' : '#e0312b'; cx.fillRect(x - 10, y - 84 * sc, 20 * s.hp / 100, 3); }
 }
 function drawZed(z, g) {
-  const x = z.x - camX; if (x < -40 || x > viewW + 40) return;
+  const x = z.x - camX; if (x < -50 || x > viewW + 50) return;
   const y = g + z.lane * 6;
-  cx.save(); cx.translate(x, y); cx.scale(z.scale, z.scale);
-  if (z.dead) { cx.globalAlpha = Math.max(0, 1 - (z.fade || 0) / 3); cx.fillStyle = '#2d2f26'; cx.fillRect(-14, -5, 30, 6); cx.restore(); return; }
-  const col = z.hit > 0 ? '#7a3a2a' : z.fresh ? '#4a4d3c' : '#3e4236';
-  cx.fillStyle = col; cx.strokeStyle = col; cx.lineCap = 'round';
-  const sway = Math.sin(B.time * (z.fresh ? 8 : 3) + z.bob);
-  if (z.crawl) {
-    cx.fillRect(-4, -10, 26, 9); cx.beginPath(); cx.arc(-6, -8, 6, 0, Math.PI * 2); cx.fill();
-    cx.lineWidth = 3; cx.beginPath(); cx.moveTo(-6, -4); cx.lineTo(-18, 0 + sway * 2); cx.stroke();
-  } else {
-    cx.lineWidth = 6; cx.beginPath(); cx.moveTo(0, -28); cx.lineTo(-3 + sway * 3, 0); cx.moveTo(2, -28); cx.lineTo(5 - sway * 3, 0); cx.stroke();
-    cx.save(); cx.translate(0, -28); cx.rotate(-0.25); cx.fillRect(-7, -28, 14, 28); cx.restore();
-    cx.beginPath(); cx.arc(-9, -58, 6, 0, Math.PI * 2); cx.fill();
-    cx.lineWidth = 3.5; cx.beginPath(); cx.moveTo(-8, -48); cx.lineTo(-26, -46 + sway * 2); cx.moveTo(-6, -44); cx.lineTo(-24, -40 - sway * 2); cx.stroke();
+  let col;
+  if (z.dead) {
+    col = (z.fade || 0) < 0.3 ? 11 : 12;
+    cx.globalAlpha = Math.max(0, Math.min(1, (8 - (z.fade || 0)) / 2));
+  } else if (z.hit > 0) col = z.crawl ? 9 : 10;
+  else if (z.bite) col = Math.floor(B.time * 3 + z.bob) % 2 ? 8 : 9;
+  else col = walkFrame(z, z.speed * (z.crawl ? 0.6 : 1) / (z.fresh ? 4.5 : 3));
+  spr(z.row, col, x, y, z.scale);
+  cx.globalAlpha = 1;
+}
+function drawFx() {
+  for (const f of B.fx) {
+    const x = f.x - camX, t = f.life / f.max;
+    if (x < -40 || x > viewW + 40) continue;
+    if (f.k === 'smoke') { cx.globalAlpha = 0.7 * (1 - t); fxSpr(6, x, f.y, 0.35 + t * 0.8); }
+    else if (f.k === 'spray') {
+      cx.globalAlpha = 1 - t * 0.6;
+      if (f.dirn < 0) { cx.save(); cx.translate(x, f.y); cx.scale(-1, 1); fxSpr(3 + f.v, 0, 0, 0.55 + t * 0.4); cx.restore(); }
+      else fxSpr(3 + f.v, x, f.y, 0.55 + t * 0.4);
+    } else if (f.k === 'drop') { cx.globalAlpha = 1; cx.fillStyle = '#5e1210'; cx.fillRect(x, f.y, f.r, f.r); }
+    else if (f.k === 'brass') { cx.globalAlpha = 1 - t; cx.fillStyle = '#c9a24a'; cx.fillRect(x, f.y, 1.6, 0.8); }
   }
-  cx.restore();
+  cx.globalAlpha = 1;
 }
 
 // ---------- Battle HUD ----------
